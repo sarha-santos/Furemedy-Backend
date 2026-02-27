@@ -1,4 +1,4 @@
-const express = require("express");
+sconst express = require("express");
 const router = express.Router();
 const pgPool = require("../config/db");
 const bcrypt = require("bcrypt");
