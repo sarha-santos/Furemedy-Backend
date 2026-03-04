@@ -97,4 +97,3 @@ ALTER TABLE ONLY public.users
 --
 
 \unrestrict 0fA9POuIYhAVRrBhaoXKkhSCq4H8eE53J7huvC3STTvmY0eSx149KAkqAcDCauV
-
