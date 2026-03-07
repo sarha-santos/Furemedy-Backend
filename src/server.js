@@ -9,6 +9,7 @@ const multer = require("multer"); //
 const pgPool = require("./config/db"); //
 const authRoutes = require("./routes/auth"); //
 const profileRoutes = require('./routes/profile'); //
+const jwt = require("jsonwebtoken"); // <--- ADDED: Needed to verify frontend token
 
 dotenv.config({ path: path.resolve(__dirname, "../.env") }); //
 
@@ -21,8 +22,7 @@ app.use(express.json()); //
 // app.use(morgan("dev")); 
 
 // Serve the uploads folder so the app can view saved pet images
-app.use('/uploads', express.static('uploads')); 
-
+app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 // --- MULTER STORAGE CONFIGURATION ---
 // This handles saving the physical image file to your server
 const storage = multer.diskStorage({
@@ -37,9 +37,115 @@ const storage = multer.diskStorage({
 
 const upload = multer({ storage: storage }); //
 
+// <--- ADDED: Inline Auth Middleware for the profile upload --->
+const authenticateToken = (req, res, next) => {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+  
+  if (!token) return res.status(401).json({ success: false, message: "No token provided" });
+
+  // Make sure process.env.JWT_SECRET matches what you used to create the token in auth.js!
+  jwt.verify(token, process.env.JWT_SECRET || 'your_jwt_secret', (err, user) => {
+    if (err) return res.status(403).json({ success: false, message: "Invalid token" });
+    req.user = user; 
+    next();
+  });
+};
+
 // --- ROUTES ---
 app.use("/api/auth", authRoutes); //
 app.use('/api/profile', profileRoutes); //
+
+// <--- ADDED: PROFILE IMAGE UPLOAD ENDPOINT --->
+/**
+ * @route   PUT /api/profile/upload-image
+ * @desc    Uploads a profile picture and updates the user's database record
+ */
+app.put('/api/profile/upload-image', authenticateToken, upload.single('profileImage'), async (req, res) => {
+  
+  // ADD THIS LINE to see exactly what is inside your token:
+  console.log("🔍 MY TOKEN CONTENTS:", req.user); 
+
+  // We will temporarily leave this as is
+// Digs one level deeper into the token to grab the 14
+const userId = req.user.user.id;
+console.log(`📸 [UPLOAD REQUEST] Profile image upload for user ID: ${userId}`);
+  
+  // ... rest of the code
+
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'No image file provided' });
+    }
+
+    // Normalize path for Windows/Mac compatibility (e.g., "uploads/123-photo.jpg")
+    const imagePath = req.file.path.replace(/\\/g, '/');
+
+    // NOTE: If your database table is not named 'users', change it below
+    const query = `
+      UPDATE users 
+      SET profile_image_path = $1 
+      WHERE id = $2 
+      RETURNING profile_image_path;
+    `;
+    
+    const result = await pgPool.query(query, [imagePath, userId]);
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({ error: 'User not found in database' });
+    }
+
+    console.log(`✅ [SUCCESS] Profile image updated for user ID: ${userId}`);
+    
+    // Send back the exact JSON your frontend expects
+    res.status(200).json({ 
+      success: true, 
+      profile_image_path: result.rows[0].profile_image_path 
+    });
+
+  } catch (err) {
+    console.error("❌ [DATABASE ERROR] Failed to update profile image:", err.message);
+    res.status(500).json({ error: 'Failed to upload image' });
+  }
+});
+
+/**
+ * @route   PUT /api/profile/update
+ * @desc    Updates user profile fields (like about_me)
+ */
+app.put('/api/profile/update', authenticateToken, async (req, res) => {
+  // Grab the correct ID from the token just like we did for the image
+  const userId = req.user.user.id;
+  const { about_me } = req.body;
+
+  console.log(`📝 [UPDATE REQUEST] Updating About Me for user ID: ${userId}`);
+
+  try {
+    // NOTE: Make sure your table is named 'users' and has an 'about_me' column!
+    const query = `
+      UPDATE users 
+      SET about_me = $1 
+      WHERE id = $2 
+      RETURNING id, first_name, last_name, email, mobile_number, profile_image_path, about_me;
+    `;
+    
+    const result = await pgPool.query(query, [about_me, userId]);
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    console.log(`✅ [SUCCESS] Profile updated for user ID: ${userId}`);
+    
+    // The frontend expects the full updated user object to refresh the UI
+    res.status(200).json(result.rows[0]);
+
+  } catch (err) {
+    console.error("❌ [DATABASE ERROR] Failed to update profile:", err.message);
+    res.status(500).json({ error: 'Failed to update profile' });
+  }
+});
+
 
 // --- DIAGNOSIS & HISTORY ENDPOINTS ---
 
