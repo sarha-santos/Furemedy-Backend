@@ -7,7 +7,6 @@ const jwt = require("jsonwebtoken");
 const path = require("path");
 const { OAuth2Client } = require('google-auth-library');
 const crypto = require('crypto');
-// --- NEW: Import axios for Facebook Graph API call ---
 const axios = require('axios');
 
 // Initialize Google Auth Client
@@ -32,7 +31,10 @@ router.post("/signup", upload.single('profileImage'), async (req, res) => {
   }
 
   try {
-    const userExists = await pgPool.query("SELECT * FROM users WHERE email = $1 OR mobile_number = $2", [email, mobileNumber]);
+    // FIX: Normalize email to lowercase
+    const normalizedEmail = email.toLowerCase();
+
+    const userExists = await pgPool.query("SELECT * FROM users WHERE email = $1 OR mobile_number = $2", [normalizedEmail, mobileNumber]);
     if (userExists.rows.length > 0) {
       return res.status(400).json({ msg: "User with this email or mobile number already exists." });
     }
@@ -43,7 +45,7 @@ router.post("/signup", upload.single('profileImage'), async (req, res) => {
 
     const newUserResult = await pgPool.query(
       "INSERT INTO users (first_name, last_name, email, mobile_number, password, profile_image_path, is_verified, security_question, security_answer) VALUES ($1, $2, $3, $4, $5, $6, TRUE, $7, $8) RETURNING *",
-      [firstName, lastName, email, mobileNumber, hashedPassword, profileImagePath, securityQuestion, hashedSecurityAnswer]
+      [firstName, lastName, normalizedEmail, mobileNumber, hashedPassword, profileImagePath, securityQuestion, hashedSecurityAnswer]
     );
 
     const user = newUserResult.rows[0];
@@ -75,21 +77,37 @@ router.post("/login", async (req, res) => {
   }
 
   try {
-    const result = await pgPool.query("SELECT * FROM users WHERE email = $1", [email]);
+    // FIX: Normalize email to lowercase
+    const normalizedEmail = email.toLowerCase();
+    
+    console.log(`[Login Info] Attempting login for: ${normalizedEmail}`);
+
+    // Look for user
+    const result = await pgPool.query("SELECT * FROM users WHERE email = $1", [normalizedEmail]);
     const user = result.rows[0];
+
+    // Debug: Check if user exists
     if (!user) {
+      console.log(`[Login Fail] User not found: ${normalizedEmail}`);
       return res.status(400).json({ msg: "Invalid credentials." });
     }
     
+    // Check for social login users (no password)
     if (!user.password) {
+      console.log(`[Login Fail] Social user trying to password login: ${normalizedEmail}`);
       return res.status(400).json({ msg: "Please log in using your social account (Google/Apple)." });
     }
 
+    // Compare Password
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) {
+      console.log(`[Login Fail] Password mismatch for: ${normalizedEmail}`);
       return res.status(400).json({ msg: "Invalid credentials." });
     }
     
+    console.log(`[Login Success] User logged in: ${normalizedEmail}`);
+
+    // Generate Token
     const payload = { user: { id: user.id } };
     jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '30d' }, (err, token) => {
       if (err) throw err;
@@ -99,7 +117,7 @@ router.post("/login", async (req, res) => {
       });
     });
   } catch (err) {
-    console.error(err.message);
+    console.error("Login Server Error:", err.message);
     res.status(500).send("Server Error");
   }
 });
@@ -114,22 +132,27 @@ router.post('/social-login', async (req, res) => {
 
     try {
         let email, firstName, lastName, profileImage;
+        
         if (provider === 'google') {
             const trustedClientIds = [process.env.GOOGLE_WEB_CLIENT_ID, process.env.GOOGLE_ANDROID_CLIENT_ID, process.env.GOOGLE_IOS_CLIENT_ID].filter(Boolean); 
             const ticket = await googleClient.verifyIdToken({ idToken: token, audience: trustedClientIds });
             const payload = ticket.getPayload();
             if (!payload) return res.status(400).json({ msg: 'Invalid Google token.' });
-            email = payload.email;
+            
+            email = payload.email.toLowerCase(); // FIX: Normalize email
             firstName = payload.given_name;
             lastName = payload.family_name;
             profileImage = payload.picture;
+
         } else if (provider === 'apple') {
             const decoded = jwt.decode(token);
             if (!decoded) return res.status(400).json({ msg: 'Invalid Apple token.' });
-            email = decoded.email;
+            
+            email = decoded.email.toLowerCase(); // FIX: Normalize email
             firstName = 'User'; 
             lastName = '';
             profileImage = null;
+
         } else {
             return res.status(400).json({ msg: 'Provider not supported.' });
         }
@@ -167,7 +190,10 @@ router.post('/social-login', async (req, res) => {
 router.post('/get-security-question', async (req, res) => {
     const { email } = req.body;
     try {
-        const result = await pgPool.query('SELECT security_question FROM users WHERE email = $1', [email]);
+        // FIX: Normalize email
+        const normalizedEmail = email.toLowerCase();
+        
+        const result = await pgPool.query('SELECT security_question FROM users WHERE email = $1', [normalizedEmail]);
         if (result.rows.length === 0) {
             return res.status(404).json({ msg: 'An account with this email does not exist.' });
         }
@@ -185,7 +211,10 @@ router.post('/get-security-question', async (req, res) => {
 router.post('/verify-security-answer', async (req, res) => {
     const { email, answer } = req.body;
     try {
-        const result = await pgPool.query('SELECT * FROM users WHERE email = $1', [email]);
+        // FIX: Normalize email
+        const normalizedEmail = email.toLowerCase();
+
+        const result = await pgPool.query('SELECT * FROM users WHERE email = $1', [normalizedEmail]);
         const user = result.rows[0];
 
         if (!user) {
@@ -224,11 +253,14 @@ router.post('/verify-security-answer', async (req, res) => {
 router.post('/reset-password-with-token', async (req, res) => {
     const { email, token, password } = req.body;
     try {
+        // FIX: Normalize email
+        const normalizedEmail = email.toLowerCase();
+        
         const hashedToken = crypto.createHash('sha256').update(token).digest('hex');
         
         const result = await pgPool.query(
             'SELECT * FROM users WHERE email = $1 AND reset_token = $2 AND reset_token_expires_at > NOW()',
-            [email, hashedToken]
+            [normalizedEmail, hashedToken]
         );
         
         const user = result.rows[0];
