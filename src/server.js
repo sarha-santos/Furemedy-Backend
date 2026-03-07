@@ -5,6 +5,7 @@ const morgan = require("morgan");
 const dotenv = require("dotenv");
 const cors = require("cors");
 const path = require("path");
+const fs = require("fs");
 const pgPool = require("./config/db");
 const authRoutes = require("./routes/auth"); // <-- 1. Import the routes
 const profileRoutes = require('./routes/profile');
