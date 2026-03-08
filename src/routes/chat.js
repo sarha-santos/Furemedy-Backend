@@ -10,6 +10,7 @@
 const express = require('express');
 const router = express.Router();
 const pgPool = require('../config/db');
+const jwt = require('jsonwebtoken');
 
 /**
  * Middleware: Verify JWT token from Authorization header
@@ -22,10 +23,13 @@ const verifyToken = (req, res, next) => {
   }
   
   try {
-    // For now, we'll decode the JWT to get the user ID
-    // In production, verify the token signature
-    const decoded = JSON.parse(Buffer.from(token.split('.')[1], 'base64'));
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
     req.userId = decoded.user?.id;
+
+    if (!req.userId) {
+      return res.status(401).json({ success: false, message: 'Invalid token payload' });
+    }
+
     next();
   } catch (err) {
     res.status(401).json({ success: false, message: 'Invalid token' });
@@ -139,6 +143,47 @@ router.get('/sessions', verifyToken, async (req, res) => {
 
     params.push(limit, offset);
     const result = await pgPool.query(query, params);
+
+    if (result.rows.length === 0) {
+      const client = await pgPool.connect();
+
+      try {
+        await client.query('BEGIN');
+
+        const createdSessionResult = await client.query(
+          `
+            INSERT INTO chat_sessions (user_id, title, max_token_limit)
+            VALUES ($1, $2, $3)
+            RETURNING id, user_id, title, created_at, updated_at, total_tokens_used, max_token_limit, is_archived;
+          `,
+          [userId, 'New Chat', 1000]
+        );
+
+        const createdSession = createdSessionResult.rows[0];
+
+        await client.query(
+          `
+            INSERT INTO chat_messages (session_id, role, content, tokens_used)
+            VALUES ($1, 'assistant', $2, 0);
+          `,
+          [createdSession.id, 'Good morning, friend 👋 How can I help you and your pet today?']
+        );
+
+        await client.query('COMMIT');
+
+        return res.status(200).json({
+          success: true,
+          data: [{ ...createdSession, message_count: 1 }],
+          count: 1,
+          created_default_session: true
+        });
+      } catch (bootstrapErr) {
+        await client.query('ROLLBACK');
+        throw bootstrapErr;
+      } finally {
+        client.release();
+      }
+    }
 
     console.log(`✅ Retrieved ${result.rows.length} sessions for user ${userId}`);
 
