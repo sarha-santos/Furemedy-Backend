@@ -200,15 +200,11 @@ const PORT = process.env.PORT || 8080;
 pgPool.query("SELECT 1")
   .then(() => {
     console.log("PostgreSQL connection successful!");
-    app.listen(Number(PORT), () => {
+    // Only ONE app.listen here
+    app.listen(Number(PORT), "0.0.0.0", () => {
       console.log(`Server is running on port ${PORT}`);
     });
   })
   .catch((error) => {
     console.error("Database connection failed:", error);
   });
-
-  // Change this part
-app.listen(Number(PORT), "0.0.0.0", () => {
-  console.log(`Server is running on port ${PORT}`);
-});
