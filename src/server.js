@@ -104,6 +104,32 @@ app.put('/api/profile/upload-image', authenticateToken, upload.single('profileIm
   }
 });
 
+// --- UPDATE ABOUT ME ENDPOINT ---
+app.put('/api/profile/update', authenticateToken, async (req, res) => {
+  // Accessing the ID correctly based on your auth middleware structure
+  const userId = req.user.user.id; 
+  const { about_me } = req.body;
+
+  try {
+    const query = `
+      UPDATE users 
+      SET about_me = $1 
+      WHERE id = $2 
+      RETURNING id, first_name, last_name, email, profile_image_path, about_me;
+    `;
+    const result = await pgPool.query(query, [about_me, userId]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+
+    res.status(200).json(result.rows[0]);
+  } catch (err) {
+    console.error("Update profile error:", err.message);
+    res.status(500).json({ success: false, error: 'Failed to update about me' });
+  }
+});
+
 // --- DIAGNOSIS & HISTORY ENDPOINTS ---
 app.post('/api/upload-scan', upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ success: false, message: "No file uploaded" });
