@@ -259,3 +259,49 @@ router.post('/reset-password-with-token', async (req, res) => {
 });
 
 module.exports = router;
+// ====================================================================
+// LOGIN ROUTE
+// ====================================================================
+router.post("/login", async (req, res) => {
+  const { email, password } = req.body;
+
+  // 1. Basic validation
+  if (!email || !password) {
+    return res.status(400).json({ msg: "Please enter all fields." });
+  }
+
+  try {
+    // 2. Check if user exists
+    const result = await pgPool.query("SELECT * FROM users WHERE email = $1", [email]);
+    if (result.rows.length === 0) {
+      return res.status(400).json({ msg: "Invalid credentials (User not found)." });
+    }
+
+    const user = result.rows[0];
+
+    // 3. Compare password
+    const isMatch = await bcrypt.compare(password, user.password);
+    if (!isMatch) {
+      return res.status(400).json({ msg: "Invalid credentials (Wrong password)." });
+    }
+
+    // 4. Generate JWT
+    const payload = { user: { id: user.id } };
+    jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '30d' }, (err, token) => {
+      if (err) throw err;
+      res.json({
+        token,
+        user: {
+          id: user.id,
+          first_name: user.first_name,
+          last_name: user.last_name,
+          email: user.email,
+          profile_image_path: user.profile_image_path
+        }
+      });
+    });
+  } catch (err) {
+    console.error("Login Error:", err.message);
+    res.status(500).send("Server Error");
+  }
+});
