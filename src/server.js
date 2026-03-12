@@ -1,17 +1,8 @@
-// furemidy-backend/src/server.js
-const cors = require('cors');
-
-// Add this BEFORE your routes
-app.use(cors({
-  origin: '*', // Allows all origins (Vercel, Localhost, Expo Go)
-  methods: ['GET', 'POST', 'PUT', 'DELETE'],
-  allowedHeaders: ['Content-Type', 'Authorization']
-}));
-
+// furemedy-backend/src/server.js
 const express = require("express");
 const morgan = require("morgan");
 const dotenv = require("dotenv");
-const cors = require("cors");
+const cors = require("cors"); // Declared ONCE here
 const path = require("path");
 const fs = require("fs");
 const multer = require("multer"); 
@@ -22,15 +13,26 @@ const chatRoutes = require('./routes/chat');
 const jwt = require("jsonwebtoken"); 
 const { createClient } = require('@supabase/supabase-js'); 
 
-// Initialize dotenv
+// 1. Initialize dotenv
 dotenv.config(); 
 
-// --- INITIALIZE SUPABASE CLIENT ---
+// 2. Initialize App
+const app = express();
+
+// 3. Initialize Supabase
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 
-console.log("Loaded GOOGLE_WEB_CLIENT_ID:", process.env.GOOGLE_WEB_CLIENT_ID ? "Yes" : "No"); 
+// 4. GLOBAL MIDDLEWARE
+// Move CORS here, AFTER app is defined and BEFORE routes
+app.use(cors({
+  origin: '*', // Allows all origins (Vercel, Localhost, Expo Go)
+  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
 
-const app = express();
+app.use(express.json()); 
+app.use(morgan('dev')); 
+app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 
 // Create uploads directories if they don't exist
 const uploadDirs = ['uploads', 'uploads/skin-assessments'];
@@ -40,11 +42,6 @@ uploadDirs.forEach(dir => {
     console.log(`Created directory: ${dir}`);
   }
 });
-
-app.use(cors()); 
-app.use(express.json()); 
-app.use(morgan('dev')); 
-app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 
 // --- MULTER STORAGE CONFIGURATION ---
 const storage = multer.memoryStorage();
@@ -56,15 +53,11 @@ const authenticateToken = (req, res, next) => {
   const token = authHeader && authHeader.split(' ')[1];
   
   if (!token) {
-    console.log("AUTH: No token provided");
     return res.status(401).json({ success: false, message: "No token provided" });
   }
 
-  const secret = process.env.JWT_SECRET;
-
-  jwt.verify(token, secret, (err, user) => {
+  jwt.verify(token, process.env.JWT_SECRET, (err, user) => {
     if (err) {
-      console.error("AUTH: Token verification failed:", err.message);
       return res.status(403).json({ success: false, message: "Invalid token signature" });
     }
     req.user = user; 
@@ -78,7 +71,6 @@ app.use('/api/profile', profileRoutes);
 app.use('/api/chat', chatRoutes); 
 
 // --- PROFILE ENDPOINTS ---
-
 app.put('/api/profile/upload-image', authenticateToken, upload.single('profileImage'), async (req, res) => {
   const userId = req.user.user.id;
   try {
@@ -106,19 +98,13 @@ app.put('/api/profile/upload-image', authenticateToken, upload.single('profileIm
   }
 });
 
-// --- DIAGNOSIS & HISTORY ENDPOINTS (UPDATED) ---
-
+// --- DIAGNOSIS & HISTORY ENDPOINTS ---
 app.post('/api/upload-scan', upload.single('file'), async (req, res) => {
-  if (!req.file) {
-    console.error("❌ No file received in request");
-    return res.status(400).json({ success: false, message: "No file uploaded" });
-  }
+  if (!req.file) return res.status(400).json({ success: false, message: "No file uploaded" });
 
   try {
     const fileExt = path.extname(req.file.originalname) || '.jpg';
     const fileName = `scan-${Date.now()}${fileExt}`;
-
-    console.log(`Cloud: Uploading ${fileName} to 'pet-scans'...`);
 
     const { data, error } = await supabase.storage
       .from('pet-scans')
@@ -127,19 +113,12 @@ app.post('/api/upload-scan', upload.single('file'), async (req, res) => {
         upsert: true 
       });
 
-    if (error) {
-      // This helps you see if it's a policy issue or bucket name issue
-      console.error("❌ Supabase Storage Error:", error.message);
-      return res.status(500).json({ success: false, message: error.message });
-    }
+    if (error) return res.status(500).json({ success: false, message: error.message });
 
     const { data: publicUrlData } = supabase.storage.from('pet-scans').getPublicUrl(fileName);
-    
-    console.log("✅ Upload Successful! Public URL:", publicUrlData.publicUrl);
     res.status(200).json({ success: true, imageUrl: publicUrlData.publicUrl });
 
   } catch (err) {
-    console.error("❌ Internal Server Error during scan upload:", err.message);
     res.status(500).json({ success: false, message: "Internal Server Error" });
   }
 });
@@ -173,7 +152,6 @@ app.get('/api/get-history/:userName', async (req, res) => {
 });
 
 // --- SERVER INITIALIZATION ---
-
 const PORT = process.env.PORT || 8080;
 
 pgPool.query("SELECT 1")
