@@ -7,100 +7,106 @@ const jwt = require("jsonwebtoken");
 const path = require("path");
 const { OAuth2Client } = require('google-auth-library');
 const crypto = require('crypto');
-// --- NEW: Import axios for Facebook Graph API call ---
 const axios = require('axios');
+const { createClient } = require('@supabase/supabase-js');
 
-// Initialize Google Auth Client
+// 1. Initialize Supabase and Google
+const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 const googleClient = new OAuth2Client(process.env.GOOGLE_WEB_CLIENT_ID);
 
-// Configure Multer for file storage
-const storage = multer.diskStorage({
-  destination: function (req, file, cb) { cb(null, 'uploads/'); },
-  filename: function (req, file, cb) { cb(null, file.fieldname + '-' + Date.now() + path.extname(file.originalname)); }
-});
-const upload = multer({ storage: storage });
+// 2. Configure Multer (ONLY ONCE)
+// We use memoryStorage because the file goes to Supabase, not your Render server's disk
+const upload = multer({ storage: multer.memoryStorage() });
 
 // ====================================================================
-// SIGNUP ROUTE 
+// SIGNUP ROUTE
 // ====================================================================
 router.post("/signup", upload.single('profileImage'), async (req, res) => {
-  const { firstName, lastName, email, mobileNumber, password, securityQuestion, securityAnswer } = req.body;
-  const profileImagePath = req.file ? req.file.path : null;
+   // ... rest of your code
+  // Match the snake_case keys sent from the updated SignupScreen.tsx
+  const { 
+    first_name, 
+    last_name, 
+    email, 
+    mobile_number, 
+    password, 
+    security_question, 
+    security_answer 
+  } = req.body;
 
-  if (!firstName || !lastName || !email || !mobileNumber || !password || !securityQuestion || !securityAnswer) {
-    return res.status(400).json({ msg: "Please enter all fields." });
+  let profileImageUrl = null;
+
+  // Basic validation
+  if (!first_name || !last_name || !email || !mobile_number || !password || !security_question || !security_answer) {
+    return res.status(400).json({ msg: "Please enter all fields correctly." });
   }
 
   try {
-    const userExists = await pgPool.query("SELECT * FROM users WHERE email = $1 OR mobile_number = $2", [email, mobileNumber]);
+    // 1. Check if user exists
+    const userExists = await pgPool.query(
+        "SELECT * FROM users WHERE email = $1 OR mobile_number = $2", 
+        [email, mobile_number]
+    );
     if (userExists.rows.length > 0) {
       return res.status(400).json({ msg: "User with this email or mobile number already exists." });
     }
 
+    // 2. Handle Profile Image Upload to Supabase
+    if (req.file) {
+      const fileExt = path.extname(req.file.originalname) || '.jpg';
+      const fileName = `profile-${Date.now()}${fileExt}`;
+
+      const { data, error: uploadError } = await supabase.storage
+        .from('profile-pictures')
+        .upload(fileName, req.file.buffer, {
+          contentType: req.file.mimetype,
+          upsert: true
+        });
+
+      if (uploadError) {
+        console.error("Supabase Profile Upload Error:", uploadError.message);
+        // We continue without an image if upload fails, or you can throw error
+      } else {
+        const { data: publicUrlData } = supabase.storage
+          .from('profile-pictures')
+          .getPublicUrl(fileName);
+        profileImageUrl = publicUrlData.publicUrl;
+      }
+    }
+
+    // 3. Hash sensitive data
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password, salt);
-    const hashedSecurityAnswer = await bcrypt.hash(securityAnswer, salt);
+    const hashedSecurityAnswer = await bcrypt.hash(security_answer, salt);
 
+    // 4. Insert into PostgreSQL
     const newUserResult = await pgPool.query(
-      "INSERT INTO users (first_name, last_name, email, mobile_number, password, profile_image_path, is_verified, security_question, security_answer) VALUES ($1, $2, $3, $4, $5, $6, TRUE, $7, $8) RETURNING *",
-      [firstName, lastName, email, mobileNumber, hashedPassword, profileImagePath, securityQuestion, hashedSecurityAnswer]
+      `INSERT INTO users 
+      (first_name, last_name, email, mobile_number, password, profile_image_path, is_verified, security_question, security_answer) 
+      VALUES ($1, $2, $3, $4, $5, $6, TRUE, $7, $8) RETURNING *`,
+      [first_name, last_name, email, mobile_number, hashedPassword, profileImageUrl, security_question, hashedSecurityAnswer]
     );
 
     const user = newUserResult.rows[0];
     const payload = { user: { id: user.id } };
     
+    // 5. Generate JWT
     jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '30d' }, (err, token) => {
       if (err) throw err;
       res.status(201).json({
         token,
-        user: { id: user.id, first_name: user.first_name, email: user.email, profile_image_path: user.profile_image_path }
+        user: { 
+            id: user.id, 
+            first_name: user.first_name, 
+            email: user.email, 
+            profile_image_path: user.profile_image_path 
+        }
       });
     });
 
   } catch (err) {
-    console.error("Signup server error:", err);
-    res.status(500).send("Server Error");
-  }
-});
-
-
-// ====================================================================
-// LOGIN ROUTE
-// ====================================================================
-router.post("/login", async (req, res) => {
-  const { email, password } = req.body;
-
-  if (!email || !password) {
-    return res.status(400).json({ msg: "Please enter all fields." });
-  }
-
-  try {
-    const result = await pgPool.query("SELECT * FROM users WHERE email = $1", [email]);
-    const user = result.rows[0];
-    if (!user) {
-      return res.status(400).json({ msg: "Invalid credentials." });
-    }
-    
-    if (!user.password) {
-      return res.status(400).json({ msg: "Please log in using your social account (Google/Apple)." });
-    }
-
-    const isMatch = await bcrypt.compare(password, user.password);
-    if (!isMatch) {
-      return res.status(400).json({ msg: "Invalid credentials." });
-    }
-    
-    const payload = { user: { id: user.id } };
-    jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '30d' }, (err, token) => {
-      if (err) throw err;
-      res.json({
-        token,
-        user: { id: user.id, first_name: user.first_name, email: user.email, profile_image_path: user.profile_image_path }
-      });
-    });
-  } catch (err) {
-    console.error(err.message);
-    res.status(500).send("Server Error");
+    console.error("Signup server error:", err.message);
+    res.status(500).json({ msg: "Server Error during registration" });
   }
 });
 
