@@ -24,12 +24,18 @@ const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY
 
 // 4. GLOBAL MIDDLEWARE
 // Move CORS here, AFTER app is defined and BEFORE routes
+// furemedy-backend/src/server.js
+
+// ... (existing imports)
+
+// 4. GLOBAL MIDDLEWARE
 app.use(cors({
-  origin: '*', // Allows all origins (Vercel, Localhost, Expo Go)
-  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  origin: '*', // Allows all origins
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'], // ADD PATCH AND OPTIONS HERE
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
+// ... (rest of your code)
 app.use(express.json()); 
 app.use(morgan('dev')); 
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
