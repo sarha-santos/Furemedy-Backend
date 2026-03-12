@@ -1,0 +1,9 @@
+# Ignore local secrets
+.env
+
+# Ignore large folders
+node_modules/
+uploads/
+
+# Ignore Mac system files
+.DS_Store

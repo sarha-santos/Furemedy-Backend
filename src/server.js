@@ -10,10 +10,14 @@ const multer = require("multer");
 const pgPool = require("./config/db"); 
 const authRoutes = require("./routes/auth"); 
 const profileRoutes = require('./routes/profile'); 
-const chatRoutes = require('./routes/chat'); // <--- ADDED
+const chatRoutes = require('./routes/chat'); 
 const jwt = require("jsonwebtoken"); 
+const { createClient } = require('@supabase/supabase-js'); // <--- ADDED SUPABASE
 
 dotenv.config({ path: path.resolve(__dirname, "../.env") }); 
+
+// --- INITIALIZE SUPABASE CLIENT ---
+const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 
 console.log("Loaded GOOGLE_WEB_CLIENT_ID:", process.env.GOOGLE_WEB_CLIENT_ID ? "Yes" : "No"); 
 
@@ -33,10 +37,8 @@ app.use(express.json());
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 
 // --- MULTER STORAGE CONFIGURATION ---
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => { cb(null, 'uploads/'); },
-  filename: (req, file, cb) => { cb(null, Date.now() + '-' + file.originalname); }
-});
+// CHANGED: Now using memoryStorage to hold the file temporarily before sending to Supabase
+const storage = multer.memoryStorage();
 const upload = multer({ storage: storage }); 
 
 // --- AUTH MIDDLEWARE ---
@@ -56,7 +58,7 @@ const authenticateToken = (req, res, next) => {
 // --- ROUTES ---
 app.use("/api/auth", authRoutes); 
 app.use('/api/profile', profileRoutes); 
-app.use('/api/chat', chatRoutes); // <--- ADDED
+app.use('/api/chat', chatRoutes); 
 
 // --- PROFILE ENDPOINTS ---
 
@@ -64,12 +66,35 @@ app.put('/api/profile/upload-image', authenticateToken, upload.single('profileIm
   const userId = req.user.user.id;
   try {
     if (!req.file) return res.status(400).json({ error: 'No image file provided' });
-    const imagePath = req.file.path.replace(/\\/g, '/');
+
+    // 1. Create unique filename
+    const fileName = `user-${userId}-${Date.now()}-${req.file.originalname.replace(/\s+/g, '-')}`;
+
+    // 2. Upload to Supabase 'profile-pictures' bucket
+    const { data, error } = await supabase.storage
+      .from('profile-pictures')
+      .upload(fileName, req.file.buffer, {
+        contentType: req.file.mimetype,
+      });
+
+    if (error) throw error;
+
+    // 3. Get public URL
+    const { data: publicUrlData } = supabase.storage
+      .from('profile-pictures')
+      .getPublicUrl(fileName);
+
+    const imageUrl = publicUrlData.publicUrl;
+
+    // 4. Update the database with the new URL
     const query = `UPDATE users SET profile_image_path = $1 WHERE id = $2 RETURNING profile_image_path;`;
-    const result = await pgPool.query(query, [imagePath, userId]);
+    const result = await pgPool.query(query, [imageUrl, userId]);
+    
     if (result.rowCount === 0) return res.status(404).json({ error: 'User not found' });
+    
     res.status(200).json({ success: true, profile_image_path: result.rows[0].profile_image_path });
   } catch (err) {
+    console.error("Profile image upload error:", err.message);
     res.status(500).json({ error: 'Failed to upload image' });
   }
 });
@@ -89,10 +114,36 @@ app.put('/api/profile/update', authenticateToken, async (req, res) => {
 
 // --- DIAGNOSIS & HISTORY ENDPOINTS ---
 
-app.post('/api/upload-scan', upload.single('file'), (req, res) => {
+app.post('/api/upload-scan', upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ success: false, message: "No file uploaded" });
-  const imageUrl = `${req.protocol}://${req.get('host')}/uploads/${req.file.filename}`;
-  res.status(200).json({ success: true, imageUrl: imageUrl });
+
+  try {
+    // 1. Create unique filename
+    const fileName = `${Date.now()}-${req.file.originalname.replace(/\s+/g, '-')}`;
+
+    // 2. Upload to Supabase 'pet-scans' bucket
+    const { data, error } = await supabase.storage
+      .from('pet-scans')
+      .upload(fileName, req.file.buffer, {
+        contentType: req.file.mimetype,
+      });
+
+    if (error) throw error;
+
+    // 3. Get public URL
+    const { data: publicUrlData } = supabase.storage
+      .from('pet-scans')
+      .getPublicUrl(fileName);
+
+    // 4. Return the URL to the frontend
+    res.status(200).json({ 
+      success: true, 
+      imageUrl: publicUrlData.publicUrl 
+    });
+  } catch (err) {
+    console.error("Supabase upload error:", err.message);
+    res.status(500).json({ success: false, message: "Failed to upload image", error: err.message });
+  }
 });
 
 app.post('/api/save-diagnosis', async (req, res) => {
@@ -156,3 +207,8 @@ pgPool.query("SELECT 1")
   .catch((error) => {
     console.error("Database connection failed:", error);
   });
+
+  // Change this part
+app.listen(Number(PORT), "0.0.0.0", () => {
+  console.log(`Server is running on port ${PORT}`);
+});
