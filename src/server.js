@@ -1,4 +1,12 @@
 // furemidy-backend/src/server.js
+const cors = require('cors');
+
+// Add this BEFORE your routes
+app.use(cors({
+  origin: '*', // Allows all origins (Vercel, Localhost, Expo Go)
+  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
 
 const express = require("express");
 const morgan = require("morgan");
