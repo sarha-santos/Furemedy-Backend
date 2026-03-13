@@ -12,8 +12,8 @@ const profileRoutes = require('./routes/profile');
 const chatRoutes = require('./routes/chat'); 
 const jwt = require("jsonwebtoken"); 
 const { createClient } = require('@supabase/supabase-js'); 
-const axios = require('axios'); // Added for AI communication
-const FormData = require('form-data'); // Added for AI communication
+const axios = require('axios'); 
+const FormData = require('form-data'); 
 
 // 1. Initialize dotenv
 dotenv.config(); 
@@ -151,8 +151,11 @@ app.post('/api/upload-scan', upload.single('file'), async (req, res) => {
       contentType: req.file.mimetype,
     });
 
-    // REPLACE THE URL BELOW with your actual Python Render URL
-    const aiResponse = await axios.post('https://furemedy-python-ai.onrender.com/predict', form, {
+    // CLEANED UP AI CALL
+    const aiUrl = 'https://furemedy-ai-service.onrender.com/predict';
+    console.log(`DEBUG: Sending image to AI at: ${aiUrl}`);
+
+    const aiResponse = await axios.post(aiUrl, form, {
       headers: { ...form.getHeaders() }
     });
 
@@ -164,7 +167,11 @@ app.post('/api/upload-scan', upload.single('file'), async (req, res) => {
 
   } catch (err) {
     console.error("Scan/AI Error:", err.message);
-    res.status(500).json({ success: false, message: "Internal Server Error" });
+    // Send back the specific error message to help debug in the app logs
+    res.status(500).json({ 
+      success: false, 
+      message: `AI Service Error: ${err.message}` 
+    });
   }
 });
 
