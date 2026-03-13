@@ -14,6 +14,7 @@ const jwt = require("jsonwebtoken");
 const { createClient } = require('@supabase/supabase-js'); 
 const axios = require('axios'); 
 const FormData = require('form-data'); 
+const PDFDocument = require('pdfkit'); // <-- added for PDF generation
 
 // 1. Initialize dotenv
 dotenv.config(); 
@@ -152,10 +153,11 @@ app.post('/api/upload-scan', upload.single('file'), async (req, res) => {
     });
 
     // CLEANED UP AI CALL
-// server.js
-   const aiUrl = 'https://delmar-undenotative-apolonia.ngrok-free.dev/predict';    console.log(`DEBUG: Sending image to AI at: ${aiUrl}`);
+    // server.js
+    const aiUrl = 'https://delmar-undenotative-apolonia.ngrok-free.dev/predict';
+    console.log(`DEBUG: Sending image to AI at: ${aiUrl}`);
 
-   const aiResponse = await axios.post(aiUrl, form, {
+    const aiResponse = await axios.post(aiUrl, form, {
       headers: { ...form.getHeaders() },
       timeout: 90000 // Increase to 90 seconds
     });
@@ -183,7 +185,17 @@ app.post('/api/save-diagnosis', async (req, res) => {
       INSERT INTO diagnosis_history 
       (user_name, pet_name, pet_breed, pet_age, diagnosis_name, severity_level, ai_results, user_symptoms, image_uri) 
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *;`;
-    const values = [userName, petName || 'Unknown', petBreed || 'Unknown', petAge || 'Unknown', diagnosis, severity, JSON.stringify(aiResults), JSON.stringify(userSymptoms), imageUri];
+    const values = [
+      userName,
+      petName || 'Unknown',
+      petBreed || 'Unknown',
+      petAge || 'Unknown',
+      diagnosis,
+      severity,
+      JSON.stringify(aiResults),
+      JSON.stringify(userSymptoms),
+      imageUri
+    ];
     const result = await pgPool.query(query, values);
     res.status(200).json({ success: true, data: result.rows[0] });
   } catch (err) {
@@ -197,10 +209,131 @@ app.get('/api/get-history/:userName', async (req, res) => {
   if (!sanitizedUserName) return res.status(200).json({ success: true, history: [] });
 
   try {
-    const result = await pgPool.query('SELECT * FROM diagnosis_history WHERE user_name = $1 ORDER BY created_at DESC;', [sanitizedUserName]);
+    const result = await pgPool.query(
+      'SELECT * FROM diagnosis_history WHERE user_name = $1 ORDER BY created_at DESC;',
+      [sanitizedUserName]
+    );
     res.status(200).json({ success: true, history: result.rows });
   } catch (error) {
     res.status(500).json({ success: false, error: 'Failed to fetch history' });
+  }
+});
+
+// --- NEW: PDF REPORT ENDPOINT ---
+app.get('/api/report-pdf/:historyId', async (req, res) => {
+  const { historyId } = req.params;
+
+  try {
+    const result = await pgPool.query(
+      'SELECT * FROM diagnosis_history WHERE id = $1',
+      [historyId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Report not found' });
+    }
+
+    const row = result.rows[0];
+
+    // Parse JSON fields safely
+    let aiResults = [];
+    let userSymptoms = [];
+    try {
+      if (row.ai_results) aiResults = JSON.parse(row.ai_results);
+    } catch {}
+    try {
+      if (row.user_symptoms) userSymptoms = JSON.parse(row.user_symptoms);
+    } catch {}
+
+    // Set PDF headers
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="fur-scan-report-${row.id}.pdf"`
+    );
+
+    const doc = new PDFDocument({ size: 'A4', margin: 40 });
+    doc.pipe(res);
+
+    // Title
+    doc
+      .fontSize(22)
+      .fillColor('#F7924A')
+      .text('Skin Analysis Report', { align: 'center' })
+      .moveDown(1.5);
+
+    // Patient info
+    doc
+      .fontSize(12)
+      .fillColor('#000000')
+      .text(`Pet Name: ${row.pet_name || 'N/A'}`)
+      .text(`Breed: ${row.pet_breed || 'Unknown'}`)
+      .text(`Age: ${row.pet_age || 'Unknown'}`)
+      .moveDown();
+
+    // Diagnosis summary
+    doc
+      .fontSize(14)
+      .fillColor('#000000')
+      .text('Diagnosis', { underline: true })
+      .moveDown(0.5);
+
+    doc
+      .fontSize(12)
+      .text(`Condition: ${row.diagnosis_name || 'N/A'}`)
+      .text(`Severity: ${row.severity_level || 'N/A'}`)
+      .moveDown();
+
+    // AI results
+    if (Array.isArray(aiResults) && aiResults.length > 0) {
+      doc
+        .fontSize(14)
+        .text('AI Confidence Breakdown', { underline: true })
+        .moveDown(0.5);
+
+      aiResults.forEach((item) => {
+        const label = item.label || item.name || 'Unknown';
+        const rawScore = item.percentage ?? item.score ?? item.probability ?? 0;
+        const score = rawScore <= 1 ? Math.round(rawScore * 100) : Math.round(rawScore);
+        doc
+          .fontSize(12)
+          .text(`• ${label}: ${score}%`);
+      });
+
+      doc.moveDown();
+    }
+
+    // User symptoms
+    doc
+      .fontSize(14)
+      .text('User-Reported Symptoms', { underline: true })
+      .moveDown(0.5);
+
+    if (Array.isArray(userSymptoms) && userSymptoms.length > 0) {
+      userSymptoms.forEach((s) => {
+        doc.fontSize(12).text(`• ${s}`);
+      });
+    } else {
+      doc.fontSize(12).text('• None reported');
+    }
+
+    doc.moveDown(1.5);
+
+    // Footer
+    doc
+      .fontSize(9)
+      .fillColor('#666666')
+      .text(
+        'This report is generated by FurScan AI. It is intended for informational purposes only and does not replace professional veterinary diagnosis or advice.',
+        { align: 'center' }
+      );
+
+    doc.end();
+  } catch (err) {
+    console.error('PDF error:', err);
+    if (!res.headersSent) {
+      res.status(500).json({ success: false, message: 'Failed to generate PDF' });
+    }
   }
 });
 
