@@ -219,9 +219,58 @@ app.get('/api/get-history/:userName', async (req, res) => {
   }
 });
 
+
+
 // --- NEW: PDF REPORT ENDPOINT ---
 app.get('/api/report-pdf/:historyId', async (req, res) => {
-  const { historyId } = req.params;
+  const { historyId } = // --- UPDATED DELETE SCAN ENDPOINT (DB + SUPABASE) ---
+app.delete('/api/delete-scan/:scanId', async (req, res) => {
+  const { scanId } = req.params;
+
+  try {
+    // 1. Get the image URI first so we know what to delete from Storage
+    const findResult = await pgPool.query(
+      'SELECT image_uri FROM diagnosis_history WHERE id = $1',
+      [scanId]
+    );
+
+    if (findResult.rowCount === 0) {
+      return res.status(404).json({ success: false, message: "Scan not found" });
+    }
+
+    const imageUrl = findResult.rows[0].image_uri;
+
+    // 2. Delete from Supabase Storage if an image exists
+    if (imageUrl) {
+      // Extract filename from URL (e.g., "scan-1709...jpg")
+      const urlParts = imageUrl.split('/');
+      const fileName = urlParts[urlParts.length - 1];
+
+      const { error: storageError } = await supabase.storage
+        .from('pet-scans')
+        .remove([fileName]);
+
+      if (storageError) {
+        console.error("Supabase Storage Delete Error:", storageError.message);
+        // We continue anyway to ensure the DB record is cleaned up
+      } else {
+        console.log(`Successfully deleted ${fileName} from Supabase`);
+      }
+    }
+
+    // 3. Delete from PostgreSQL
+    await pgPool.query('DELETE FROM diagnosis_history WHERE id = $1', [scanId]);
+
+    res.status(200).json({ 
+      success: true, 
+      message: "Scan and image deleted successfully" 
+    });
+  } catch (error) {
+    console.error("Delete error:", error.message);
+    res.status(500).json({ success: false, error: 'Internal Server Error' });
+  }
+});req.params;
+
 
   try {
     const result = await pgPool.query('SELECT * FROM diagnosis_history WHERE id = $1', [historyId]);
