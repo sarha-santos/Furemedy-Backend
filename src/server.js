@@ -152,8 +152,8 @@ app.post('/api/upload-scan', upload.single('file'), async (req, res) => {
     });
 
     // CLEANED UP AI CALL
-    const aiUrl = 'https://furemedy-ai-service.onrender.com/predict';
-    console.log(`DEBUG: Sending image to AI at: ${aiUrl}`);
+// server.js
+   const aiUrl = 'https://delmar-undenotative-apolonia.ngrok-free.dev/predict';    console.log(`DEBUG: Sending image to AI at: ${aiUrl}`);
 
    const aiResponse = await axios.post(aiUrl, form, {
       headers: { ...form.getHeaders() },
