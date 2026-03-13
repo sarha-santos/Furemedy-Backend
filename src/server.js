@@ -2,7 +2,7 @@
 const express = require("express");
 const morgan = require("morgan");
 const dotenv = require("dotenv");
-const cors = require("cors"); // Declared ONCE here
+const cors = require("cors"); 
 const path = require("path");
 const fs = require("fs");
 const multer = require("multer"); 
@@ -12,6 +12,8 @@ const profileRoutes = require('./routes/profile');
 const chatRoutes = require('./routes/chat'); 
 const jwt = require("jsonwebtoken"); 
 const { createClient } = require('@supabase/supabase-js'); 
+const axios = require('axios'); // Added for AI communication
+const FormData = require('form-data'); // Added for AI communication
 
 // 1. Initialize dotenv
 dotenv.config(); 
@@ -23,19 +25,12 @@ const app = express();
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 
 // 4. GLOBAL MIDDLEWARE
-// Move CORS here, AFTER app is defined and BEFORE routes
-// furemedy-backend/src/server.js
-
-// ... (existing imports)
-
-// 4. GLOBAL MIDDLEWARE
 app.use(cors({
-  origin: '*', // Allows all origins
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'], // ADD PATCH AND OPTIONS HERE
+  origin: '*', 
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
-// ... (rest of your code)
 app.use(express.json()); 
 app.use(morgan('dev')); 
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
@@ -104,9 +99,7 @@ app.put('/api/profile/upload-image', authenticateToken, upload.single('profileIm
   }
 });
 
-// --- UPDATE ABOUT ME ENDPOINT ---
 app.put('/api/profile/update', authenticateToken, async (req, res) => {
-  // Accessing the ID correctly based on your auth middleware structure
   const userId = req.user.user.id; 
   const { about_me } = req.body;
 
@@ -135,6 +128,7 @@ app.post('/api/upload-scan', upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ success: false, message: "No file uploaded" });
 
   try {
+    // 1. Upload to Supabase
     const fileExt = path.extname(req.file.originalname) || '.jpg';
     const fileName = `scan-${Date.now()}${fileExt}`;
 
@@ -148,9 +142,28 @@ app.post('/api/upload-scan', upload.single('file'), async (req, res) => {
     if (error) return res.status(500).json({ success: false, message: error.message });
 
     const { data: publicUrlData } = supabase.storage.from('pet-scans').getPublicUrl(fileName);
-    res.status(200).json({ success: true, imageUrl: publicUrlData.publicUrl });
+    const imageUrl = publicUrlData.publicUrl;
+
+    // 2. Forward to Python AI Service
+    const form = new FormData();
+    form.append('file', req.file.buffer, {
+      filename: fileName,
+      contentType: req.file.mimetype,
+    });
+
+    // REPLACE THE URL BELOW with your actual Python Render URL
+    const aiResponse = await axios.post('https://furemedy-python-ai.onrender.com/predict', form, {
+      headers: { ...form.getHeaders() }
+    });
+
+    res.status(200).json({ 
+      success: true, 
+      imageUrl: imageUrl,
+      aiResults: aiResponse.data 
+    });
 
   } catch (err) {
+    console.error("Scan/AI Error:", err.message);
     res.status(500).json({ success: false, message: "Internal Server Error" });
   }
 });
