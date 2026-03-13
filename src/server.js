@@ -228,8 +228,13 @@ app.get('/api/report-pdf/:historyId', async (req, res) => {
     if (result.rows.length === 0) return res.status(404).json({ success: false, message: 'Report not found' });
 
     const row = result.rows[0];
-    const aiResults = row.ai_results ? JSON.parse(row.ai_results) : [];
-    const userSymptoms = row.user_symptoms ? JSON.parse(row.user_symptoms) : [];
+    const aiResults = typeof row.ai_results === 'string' 
+  ? JSON.parse(row.ai_results) 
+  : (row.ai_results || []);
+
+    const userSymptoms = typeof row.user_symptoms === 'string' 
+  ? JSON.parse(row.user_symptoms) 
+  : (row.user_symptoms || []);
 
     // Define colors based on severity (matching your app's triage colors)
     const severity = (row.severity_level || 'low').toLowerCase();
