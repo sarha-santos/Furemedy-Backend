@@ -152,14 +152,12 @@ app.post('/api/upload-scan', upload.single('file'), async (req, res) => {
       contentType: req.file.mimetype,
     });
 
-    // CLEANED UP AI CALL
-    // server.js
     const aiUrl = 'https://delmar-undenotative-apolonia.ngrok-free.dev/predict';
     console.log(`DEBUG: Sending image to AI at: ${aiUrl}`);
 
     const aiResponse = await axios.post(aiUrl, form, {
       headers: { ...form.getHeaders() },
-      timeout: 90000 // Increase to 90 seconds
+      timeout: 90000 
     });
 
     res.status(200).json({ 
@@ -170,7 +168,6 @@ app.post('/api/upload-scan', upload.single('file'), async (req, res) => {
 
   } catch (err) {
     console.error("Scan/AI Error:", err.message);
-    // Send back the specific error message to help debug in the app logs
     res.status(500).json({ 
       success: false, 
       message: `AI Service Error: ${err.message}` 
@@ -219,16 +216,12 @@ app.get('/api/get-history/:userName', async (req, res) => {
   }
 });
 
+// --- NEW: DELETE SCAN ENDPOINT (WITH SUPABASE CLEANUP) ---
 
-
-// --- NEW: PDF REPORT ENDPOINT ---
-app.get('/api/report-pdf/:historyId', async (req, res) => {
-  const { historyId } = // --- UPDATED DELETE SCAN ENDPOINT (DB + SUPABASE) ---
 app.delete('/api/delete-scan/:scanId', async (req, res) => {
   const { scanId } = req.params;
-
   try {
-    // 1. Get the image URI first so we know what to delete from Storage
+    // 1. Get the image URL from DB before deleting the row
     const findResult = await pgPool.query(
       'SELECT image_uri FROM diagnosis_history WHERE id = $1',
       [scanId]
@@ -240,37 +233,25 @@ app.delete('/api/delete-scan/:scanId', async (req, res) => {
 
     const imageUrl = findResult.rows[0].image_uri;
 
-    // 2. Delete from Supabase Storage if an image exists
-    if (imageUrl) {
-      // Extract filename from URL (e.g., "scan-1709...jpg")
-      const urlParts = imageUrl.split('/');
-      const fileName = urlParts[urlParts.length - 1];
-
-      const { error: storageError } = await supabase.storage
-        .from('pet-scans')
-        .remove([fileName]);
-
-      if (storageError) {
-        console.error("Supabase Storage Delete Error:", storageError.message);
-        // We continue anyway to ensure the DB record is cleaned up
-      } else {
-        console.log(`Successfully deleted ${fileName} from Supabase`);
-      }
+    // 2. Delete from Supabase Storage if URI exists
+    if (imageUrl && imageUrl.includes('supabase.co')) {
+      const fileName = imageUrl.split('/').pop();
+      await supabase.storage.from('pet-scans').remove([fileName]);
     }
 
     // 3. Delete from PostgreSQL
     await pgPool.query('DELETE FROM diagnosis_history WHERE id = $1', [scanId]);
 
-    res.status(200).json({ 
-      success: true, 
-      message: "Scan and image deleted successfully" 
-    });
-  } catch (error) {
-    console.error("Delete error:", error.message);
-    res.status(500).json({ success: false, error: 'Internal Server Error' });
+    res.status(200).json({ success: true, message: "Deleted from DB and Storage" });
+  } catch (err) {
+    console.error("Delete endpoint error:", err.message);
+    res.status(500).json({ success: false, error: err.message });
   }
-});req.params;
+});
 
+// --- NEW: PDF REPORT ENDPOINT ---
+app.get('/api/report-pdf/:historyId', async (req, res) => {
+  const { historyId } = req.params;
 
   try {
     const result = await pgPool.query('SELECT * FROM diagnosis_history WHERE id = $1', [historyId]);
@@ -285,12 +266,11 @@ app.delete('/api/delete-scan/:scanId', async (req, res) => {
   ? JSON.parse(row.user_symptoms) 
   : (row.user_symptoms || []);
 
-    // Define colors based on severity (matching your app's triage colors)
     const severity = (row.severity_level || 'low').toLowerCase();
     const triageColors = {
-      high: '#D9534F',    // Red
-      moderate: '#F7924A', // Orange
-      low: '#5CB85C'      // Green
+      high: '#D9534F',    
+      moderate: '#F7924A', 
+      low: '#5CB85C'      
     };
     const themeColor = triageColors[severity] || triageColors.low;
 
@@ -300,20 +280,16 @@ app.delete('/api/delete-scan/:scanId', async (req, res) => {
     const doc = new PDFDocument({ size: 'A4', margin: 40 });
     doc.pipe(res);
 
-    // --- HEADER ---
     doc.rect(0, 0, 600, 80).fill(themeColor);
     doc.fillColor('#FFFFFF').fontSize(24).font('Helvetica-Bold').text('FurScan Analysis Report', 40, 30);
     doc.fontSize(10).font('Helvetica').text(`Generated on ${new Date(row.created_at).toLocaleDateString()}`, 40, 60);
 
-    // --- TOP SECTION (Image & Pet Info) ---
     let currentY = 100;
 
-    // Fetch and Draw Image (if exists)
     if (row.image_uri) {
       try {
         const imageResponse = await axios.get(row.image_uri, { responseType: 'arraybuffer' });
         doc.image(imageResponse.data, 40, currentY, { width: 160, height: 160 });
-        // Draw border around image
         doc.lineWidth(3).rect(40, currentY, 160, 160).stroke(themeColor);
       } catch (e) {
         doc.rect(40, currentY, 160, 160).fill('#EEEEEE');
@@ -321,7 +297,6 @@ app.delete('/api/delete-scan/:scanId', async (req, res) => {
       }
     }
 
-    // Pet Information Card
     doc.fillColor('#333333');
     doc.font('Helvetica-Bold').fontSize(14).text('PATIENT INFORMATION', 220, currentY);
     doc.font('Helvetica').fontSize(18).fillColor(themeColor).text(row.pet_name || 'Unnamed Pet', 220, currentY + 20);
@@ -332,32 +307,23 @@ app.delete('/api/delete-scan/:scanId', async (req, res) => {
     doc.fontSize(10).fillColor('#666666').text('AGE', 350, currentY + 50);
     doc.fontSize(12).fillColor('#333333').text(row.pet_age || 'N/A', 350, currentY + 62);
 
-    // Triage Badge
     doc.roundedRect(220, currentY + 90, 120, 25, 5).fill(themeColor);
     doc.fillColor('#FFFFFF').fontSize(10).font('Helvetica-Bold').text(severity.toUpperCase(), 230, currentY + 98, { width: 100, align: 'center' });
 
     currentY = 280;
-
-    // --- DETECTED CONDITION SECTION ---
     doc.fillColor('#666666').font('Helvetica-Bold').fontSize(10).text('DETECTED CONDITION', 40, currentY);
     doc.fillColor(themeColor).fontSize(20).text(row.diagnosis_name || 'NO SKIN DISEASE PRESENT', 40, currentY + 15);
 
     currentY += 60;
-
-    // --- AI CONFIDENCE (Progress Bars) ---
     doc.fillColor('#333333').font('Helvetica-Bold').fontSize(12).text('CONFIDENCE BREAKDOWN', 40, currentY);
     currentY += 20;
 
     aiResults.slice(0, 5).forEach((res, index) => {
       const label = res.label || res.name || 'Unknown';
       const score = res.score || (res.probability ? Math.round(res.probability * 100) : 0);
-      
       doc.fillColor('#333333').font('Helvetica').fontSize(10).text(label, 40, currentY);
       doc.text(`${score}%`, 520, currentY, { align: 'right' });
-
-      // Progress Bar Background
       doc.roundedRect(40, currentY + 15, 515, 8, 4).fill('#EAEAEA');
-      // Progress Bar Fill
       const barWidth = (score / 100) * 515;
       if (barWidth > 0) {
         doc.roundedRect(40, currentY + 15, barWidth, 8, 4).fill(index === 0 ? themeColor : '#BDC3C7');
@@ -365,7 +331,6 @@ app.delete('/api/delete-scan/:scanId', async (req, res) => {
       currentY += 35;
     });
 
-    // --- USER SYMPTOMS ---
     doc.fillColor('#333333').font('Helvetica-Bold').fontSize(12).text('REPORTED SYMPTOMS', 40, currentY);
     currentY += 20;
     
@@ -380,7 +345,6 @@ app.delete('/api/delete-scan/:scanId', async (req, res) => {
       currentY += 15;
     }
 
-    // --- FOOTER DISCLAIMER ---
     doc.rect(40, 750, 515, 1).stroke('#EEEEEE');
     doc.fontSize(8).fillColor('#999999').text(
       'DISCLAIMER: This report is generated by FurScan AI for informational purposes. It is not a clinical diagnosis. Please consult a licensed veterinarian for medical advice.',
