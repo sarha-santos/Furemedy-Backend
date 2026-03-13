@@ -224,116 +224,119 @@ app.get('/api/report-pdf/:historyId', async (req, res) => {
   const { historyId } = req.params;
 
   try {
-    const result = await pgPool.query(
-      'SELECT * FROM diagnosis_history WHERE id = $1',
-      [historyId]
-    );
-
-    if (result.rows.length === 0) {
-      return res.status(404).json({ success: false, message: 'Report not found' });
-    }
+    const result = await pgPool.query('SELECT * FROM diagnosis_history WHERE id = $1', [historyId]);
+    if (result.rows.length === 0) return res.status(404).json({ success: false, message: 'Report not found' });
 
     const row = result.rows[0];
+    const aiResults = row.ai_results ? JSON.parse(row.ai_results) : [];
+    const userSymptoms = row.user_symptoms ? JSON.parse(row.user_symptoms) : [];
 
-    // Parse JSON fields safely
-    let aiResults = [];
-    let userSymptoms = [];
-    try {
-      if (row.ai_results) aiResults = JSON.parse(row.ai_results);
-    } catch {}
-    try {
-      if (row.user_symptoms) userSymptoms = JSON.parse(row.user_symptoms);
-    } catch {}
+    // Define colors based on severity (matching your app's triage colors)
+    const severity = (row.severity_level || 'low').toLowerCase();
+    const triageColors = {
+      high: '#D9534F',    // Red
+      moderate: '#F7924A', // Orange
+      low: '#5CB85C'      // Green
+    };
+    const themeColor = triageColors[severity] || triageColors.low;
 
-    // Set PDF headers
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader(
-      'Content-Disposition',
-      `attachment; filename="fur-scan-report-${row.id}.pdf"`
-    );
+    res.setHeader('Content-Disposition', `attachment; filename="furemedy-report-${row.id}.pdf"`);
 
     const doc = new PDFDocument({ size: 'A4', margin: 40 });
     doc.pipe(res);
 
-    // Title
-    doc
-      .fontSize(22)
-      .fillColor('#F7924A')
-      .text('Skin Analysis Report', { align: 'center' })
-      .moveDown(1.5);
+    // --- HEADER ---
+    doc.rect(0, 0, 600, 80).fill(themeColor);
+    doc.fillColor('#FFFFFF').fontSize(24).font('Helvetica-Bold').text('FurScan Analysis Report', 40, 30);
+    doc.fontSize(10).font('Helvetica').text(`Generated on ${new Date(row.created_at).toLocaleDateString()}`, 40, 60);
 
-    // Patient info
-    doc
-      .fontSize(12)
-      .fillColor('#000000')
-      .text(`Pet Name: ${row.pet_name || 'N/A'}`)
-      .text(`Breed: ${row.pet_breed || 'Unknown'}`)
-      .text(`Age: ${row.pet_age || 'Unknown'}`)
-      .moveDown();
+    // --- TOP SECTION (Image & Pet Info) ---
+    let currentY = 100;
 
-    // Diagnosis summary
-    doc
-      .fontSize(14)
-      .fillColor('#000000')
-      .text('Diagnosis', { underline: true })
-      .moveDown(0.5);
-
-    doc
-      .fontSize(12)
-      .text(`Condition: ${row.diagnosis_name || 'N/A'}`)
-      .text(`Severity: ${row.severity_level || 'N/A'}`)
-      .moveDown();
-
-    // AI results
-    if (Array.isArray(aiResults) && aiResults.length > 0) {
-      doc
-        .fontSize(14)
-        .text('AI Confidence Breakdown', { underline: true })
-        .moveDown(0.5);
-
-      aiResults.forEach((item) => {
-        const label = item.label || item.name || 'Unknown';
-        const rawScore = item.percentage ?? item.score ?? item.probability ?? 0;
-        const score = rawScore <= 1 ? Math.round(rawScore * 100) : Math.round(rawScore);
-        doc
-          .fontSize(12)
-          .text(`• ${label}: ${score}%`);
-      });
-
-      doc.moveDown();
+    // Fetch and Draw Image (if exists)
+    if (row.image_uri) {
+      try {
+        const imageResponse = await axios.get(row.image_uri, { responseType: 'arraybuffer' });
+        doc.image(imageResponse.data, 40, currentY, { width: 160, height: 160 });
+        // Draw border around image
+        doc.lineWidth(3).rect(40, currentY, 160, 160).stroke(themeColor);
+      } catch (e) {
+        doc.rect(40, currentY, 160, 160).fill('#EEEEEE');
+        doc.fillColor('#999999').text('Image Unavailable', 75, currentY + 75);
+      }
     }
 
-    // User symptoms
-    doc
-      .fontSize(14)
-      .text('User-Reported Symptoms', { underline: true })
-      .moveDown(0.5);
+    // Pet Information Card
+    doc.fillColor('#333333');
+    doc.font('Helvetica-Bold').fontSize(14).text('PATIENT INFORMATION', 220, currentY);
+    doc.font('Helvetica').fontSize(18).fillColor(themeColor).text(row.pet_name || 'Unnamed Pet', 220, currentY + 20);
+    
+    doc.fontSize(10).fillColor('#666666').text('BREED', 220, currentY + 50);
+    doc.fontSize(12).fillColor('#333333').text(row.pet_breed || 'Unknown', 220, currentY + 62);
+    
+    doc.fontSize(10).fillColor('#666666').text('AGE', 350, currentY + 50);
+    doc.fontSize(12).fillColor('#333333').text(row.pet_age || 'N/A', 350, currentY + 62);
 
-    if (Array.isArray(userSymptoms) && userSymptoms.length > 0) {
-      userSymptoms.forEach((s) => {
-        doc.fontSize(12).text(`• ${s}`);
+    // Triage Badge
+    doc.roundedRect(220, currentY + 90, 120, 25, 5).fill(themeColor);
+    doc.fillColor('#FFFFFF').fontSize(10).font('Helvetica-Bold').text(severity.toUpperCase(), 230, currentY + 98, { width: 100, align: 'center' });
+
+    currentY = 280;
+
+    // --- DETECTED CONDITION SECTION ---
+    doc.fillColor('#666666').font('Helvetica-Bold').fontSize(10).text('DETECTED CONDITION', 40, currentY);
+    doc.fillColor(themeColor).fontSize(20).text(row.diagnosis_name || 'NO SKIN DISEASE PRESENT', 40, currentY + 15);
+
+    currentY += 60;
+
+    // --- AI CONFIDENCE (Progress Bars) ---
+    doc.fillColor('#333333').font('Helvetica-Bold').fontSize(12).text('CONFIDENCE BREAKDOWN', 40, currentY);
+    currentY += 20;
+
+    aiResults.slice(0, 5).forEach((res, index) => {
+      const label = res.label || res.name || 'Unknown';
+      const score = res.score || (res.probability ? Math.round(res.probability * 100) : 0);
+      
+      doc.fillColor('#333333').font('Helvetica').fontSize(10).text(label, 40, currentY);
+      doc.text(`${score}%`, 520, currentY, { align: 'right' });
+
+      // Progress Bar Background
+      doc.roundedRect(40, currentY + 15, 515, 8, 4).fill('#EAEAEA');
+      // Progress Bar Fill
+      const barWidth = (score / 100) * 515;
+      if (barWidth > 0) {
+        doc.roundedRect(40, currentY + 15, barWidth, 8, 4).fill(index === 0 ? themeColor : '#BDC3C7');
+      }
+      currentY += 35;
+    });
+
+    // --- USER SYMPTOMS ---
+    doc.fillColor('#333333').font('Helvetica-Bold').fontSize(12).text('REPORTED SYMPTOMS', 40, currentY);
+    currentY += 20;
+    
+    if (userSymptoms.length > 0) {
+      userSymptoms.forEach(s => {
+        doc.fillColor('#5CB85C').text('✔', 45, currentY);
+        doc.fillColor('#333333').font('Helvetica').text(s, 60, currentY);
+        currentY += 15;
       });
     } else {
-      doc.fontSize(12).text('• None reported');
+      doc.font('Helvetica-Oblique').text('No manual symptoms reported.', 40, currentY);
+      currentY += 15;
     }
 
-    doc.moveDown(1.5);
-
-    // Footer
-    doc
-      .fontSize(9)
-      .fillColor('#666666')
-      .text(
-        'This report is generated by FurScan AI. It is intended for informational purposes only and does not replace professional veterinary diagnosis or advice.',
-        { align: 'center' }
-      );
+    // --- FOOTER DISCLAIMER ---
+    doc.rect(40, 750, 515, 1).stroke('#EEEEEE');
+    doc.fontSize(8).fillColor('#999999').text(
+      'DISCLAIMER: This report is generated by FurScan AI for informational purposes. It is not a clinical diagnosis. Please consult a licensed veterinarian for medical advice.',
+      40, 765, { align: 'center', width: 515 }
+    );
 
     doc.end();
   } catch (err) {
     console.error('PDF error:', err);
-    if (!res.headersSent) {
-      res.status(500).json({ success: false, message: 'Failed to generate PDF' });
-    }
+    res.status(500).json({ success: false, message: 'Failed to generate visual PDF' });
   }
 });
 
